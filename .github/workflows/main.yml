@@ -18,14 +18,14 @@ jobs:
     - name: Install build dependencies
       shell: pwsh
       run: |
-        winget install -e --id Microsoft.VisualStudio.2022.BuildTools
-        winget install -e --id Rustlang.Rustup
-        winget install -e --id LLVM.LLVM
-        winget install -e --id Kitware.CMake
-        winget install -e --id GnuWin32.UnZip
-        winget install -e --id Git.Git
-        winget install -e --id JernejSimoncic.Wget
-        winget install -e --id 7zip.7zip
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools" --no-progress --accept-license
+        choco install rust -y
+        choco install llvm -y
+        choco install cmake -y
+        choco install git -y
+        choco install wget -y
+        choco install 7zip -y
+        choco install unzip -y
         irm https://bun.sh/install.ps1 | iex
 
     - name: Setup vcpkg and ffmpeg
