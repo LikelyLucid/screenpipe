@@ -1,0 +1,68 @@
+name: Build Windows Exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Clone ScreenPipe repository
+      run: git clone https://github.com/mediar-ai/screenpipe.git
+
+    - name: Install build dependencies
+      shell: pwsh
+      run: |
+        winget install -e --id Microsoft.VisualStudio.2022.BuildTools
+        winget install -e --id Rustlang.Rustup
+        winget install -e --id LLVM.LLVM
+        winget install -e --id Kitware.CMake
+        winget install -e --id GnuWin32.UnZip
+        winget install -e --id Git.Git
+        winget install -e --id JernejSimoncic.Wget
+        winget install -e --id 7zip.7zip
+        irm https://bun.sh/install.ps1 | iex
+
+    - name: Setup vcpkg and ffmpeg
+      shell: pwsh
+      run: |
+        git clone https://github.com/microsoft/vcpkg.git
+        cd vcpkg
+        ./bootstrap-vcpkg.bat -disableMetrics
+        ./vcpkg.exe integrate install --disable-metrics
+        ./vcpkg.exe install ffmpeg:x64-windows
+
+    - name: Set environment variables
+      shell: pwsh
+      run: |
+        $vcpkgDir = "${PWD}\vcpkg"
+        echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
+        echo "PKG_CONFIG_PATH=$vcpkgDir\packages\ffmpeg_x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+        echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+        echo 'C:\Program Files (x86)\GnuWin32\bin' >> $env:GITHUB_PATH
+
+    - name: Build ScreenPipe CLI
+      shell: pwsh
+      working-directory: ./screenpipe
+      run: cargo build --release
+
+    - name: Build ScreenPipe desktop app
+      shell: pwsh
+      working-directory: ./screenpipe/screenpipe-app-tauri
+      run: |
+        bun install
+        bun scripts/pre_build.js
+        bun tauri build
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: screenpipe-windows
+        path: |
+          screenpipe/target/release/
+          screenpipe/screenpipe-app-tauri/src-tauri/target/release/
