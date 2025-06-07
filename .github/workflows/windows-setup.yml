@@ -1,186 +1,45 @@
-name: Windows Environment Setup & Build
+name: Build Windows Artifact
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  windows-setup-build:
+  build-windows:
     runs-on: windows-latest
-    env:
-      DEV_ROOT: C:\dev
 
     steps:
-      # 1. Create C:\dev directory
-      - name: Create dev directory
-        run: |
-          New-Item -ItemType Directory -Force -Path $Env:DEV_ROOT
-        shell: pwsh
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      # 2. (Prerequisite) Ensure winget is available.
-      #    On GitHub-hosted windows-latest runners, winget is already installed.
-      - name: Verify winget
-        run: |
-          Write-Host "winget version:"
-          winget --version
-        shell: pwsh
-
-      # 3. Install required tools via winget
-      - name: Install Build Tools, Rust, LLVM, CMake, UnZip, Git, Wget, 7-Zip
-        run: |
-          winget install -e --id Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements
-          winget install -e --id Rustlang.Rustup --accept-package-agreements --accept-source-agreements
-          winget install -e --id LLVM.LLVM --accept-package-agreements --accept-source-agreements
-          winget install -e --id Kitware.CMake --accept-package-agreements --accept-source-agreements
-          winget install -e --id GnuWin32.UnZip --accept-package-agreements --accept-source-agreements
-          winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
-          winget install -e --id JernejSimoncic.Wget --accept-package-agreements --accept-source-agreements
-          winget install -e --id 7zip.7zip --accept-package-agreements --accept-source-agreements
-        shell: pwsh
-
-      # 4. Install Bun (JavaScript runtime) via PowerShell
-      - name: Install Bun
-        run: |
-          irm https://bun.sh/install.ps1 | iex
-          # Add Bun to PATH for the current session
-          $bunPath = "$Env:USERPROFILE\.bun\bin"
-          echo "BUN_PATH=$bunPath" >> $Env:GITHUB_ENV
-          echo "PATH=$($Env:PATH);$bunPath" >> $Env:GITHUB_ENV
-        shell: pwsh
-
-      # 5. Clone and bootstrap vcpkg under C:\dev\vcpkg
-      - name: Clone vcpkg
-        run: |
-          cd $Env:DEV_ROOT
-          if (Test-Path vcpkg) {
-            Remove-Item -Recurse -Force vcpkg
-          }
-          git clone https://github.com/microsoft/vcpkg.git
-        shell: pwsh
-
-      - name: Bootstrap vcpkg & install ffmpeg:x64-windows
-        run: |
-          cd $Env:DEV_ROOT\vcpkg
-          # Disable metrics and bootstrap
-          .\bootstrap-vcpkg.bat -disableMetrics
-          # Integrate user-wide (for pkg-config, CMake, etc.)
-          .\vcpkg.exe integrate install --disable-metrics
-          # Install ffmpeg for x64-windows
-          .\vcpkg.exe install ffmpeg:x64-windows
-          # Export VCPKG_ROOT and PKG_CONFIG_PATH for downstream steps
-          $ffmpegPkgConfig = Join-Path $Env:DEV_ROOT "vcpkg\packages\ffmpeg_x64-windows\lib\pkgconfig"
-          echo "VCPKG_ROOT=$Env:DEV_ROOT\vcpkg" >> $Env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$ffmpegPkgConfig" >> $Env:GITHUB_ENV
-        shell: pwsh
-
-      # 6. Set LIBCLANG_PATH and extend PATH to include GnuWin32\bin
-      - name: Configure additional environment variables
-        run: |
-          # LIBCLANG_PATH points to LLVM bin folder
-          $llvmBin = "C:\Program Files\LLVM\bin"
-          echo "LIBCLANG_PATH=$llvmBin" >> $Env:GITHUB_ENV
-
-          # Add GnuWin32 bin to PATH
-          $gnuBin = "C:\Program Files (x86)\GnuWin32\bin"
-          echo "PATH=${{ env.PATH }};$gnuBin" >> $Env:GITHUB_ENV
-        shell: pwsh
-
-      # 7. Clone the screenpipe repository under C:\dev\screenpipe
-      - name: Clone screenpipe project
-        run: |
-          cd $Env:DEV_ROOT
-          if (Test-Path screenpipe) {
-            Remove-Item -Recurse -Force screenpipe
-          }
-          git clone https://github.com/mediar-ai/screenpipe.git
-        shell: pwsh
-
-      # 8. Install Intel OpenMP via pip and copy DLLs into screenpipe-app-tauri\src-tauri\mkl
-      - name: Install & copy Intel OpenMP DLLs
-        run: |
-          cd $Env:DEV_ROOT\screenpipe
-          # Ensure Python is on PATH
-          python --version
-
-          # Create target directory for MKL/OpenMP DLLs
-          $mklDir = Join-Path (Get-Location) "screenpipe-app-tauri\src-tauri\mkl"
-          New-Item -ItemType Directory -Force -Path $mklDir | Out-Null
-
-          # Upgrade pip and install intel-openmp into a temporary folder
-          python -m pip install --upgrade pip
-          $tempDir = "temp_omp"
-          New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-
-          Write-Host "Installing Intel OpenMP..."
-          python -m pip install intel-openmp --target $tempDir
-
-          Write-Host "Copying DLL files..."
-          Get-ChildItem -Path $tempDir -Recurse -Filter "*.dll" | ForEach-Object {
-              Write-Host "Copying $($_.FullName)"
-              Copy-Item $_.FullName -Destination $mklDir -Force
-          }
-
-          # Clean up temp
-          Remove-Item -Path $tempDir -Recurse -Force
-        shell: pwsh
-
-      # 9. Ensure vcredist (vcruntime140.dll) is installed and copy it into screenpipe-app-tauri\src-tauri\vcredist
-      - name: Install & copy vcruntime140.dll
-        run: |
-          cd $Env:DEV_ROOT\screenpipe
-
-          $dllPath = "C:\Windows\System32\vcruntime140.dll"
-          if (-Not (Test-Path $dllPath)) {
-            Write-Host "vcruntime140.dll not found; attempting to install Visual C++ Redistributable..."
-            Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "& {
-              [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-              \$url = ''https://vcredist.com/install.ps1''
-              \$scriptPath = ''$env:TEMP\install_vcredist.ps1''
-              Invoke-WebRequest -Uri \$url -OutFile \$scriptPath
-              & \$scriptPath
-            }"' -Wait
-          }
-
-          # If install still not present, fail
-          if (-Not (Test-Path $dllPath)) {
-            Write-Host "vcruntime140.dll installation failed. Exiting."
-            exit 1
-          }
-
-          # Copy into the project
-          $vcredistDir = Join-Path (Get-Location) "screenpipe-app-tauri\src-tauri\vcredist"
-          New-Item -ItemType Directory -Force -Path $vcredistDir | Out-Null
-          Copy-Item $dllPath -Destination $vcredistDir -Force
-          Write-Host "vcruntime140.dll copied successfully."
-        shell: pwsh
-
-      # 10. Build the Rust project
-      - name: Build Rust (screenpipe)
-        run: |
-          cd $Env:DEV_ROOT\screenpipe
-          # Ensure Rust is available
-          rustc --version
-          cargo build --release
-        shell: pwsh
-
-      # 11. Build the Tauri front-end using Bun
-      - name: Build Tauri (screenpipe-app-tauri)
-        run: |
-          cd $Env:DEV_ROOT\screenpipe\screenpipe-app-tauri
-          # Ensure bun is installed and on PATH
-          bun --version
-          bun install
-          bun tauri build
-        shell: pwsh
-
-      # 12. (Optional) Upload artifacts (e.g., the built binaries) if you want to persist them
-      - name: Upload release binaries
-        if: success()
-        uses: actions/upload-artifact@v3
+      # ---------- Toolchain setup ----------
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: screenpipe-windows-release
-          path: |
-            $Env:DEV_ROOT\screenpipe\target\release\screenpipe.exe
-            $Env:DEV_ROOT\screenpipe\screenpipe-app-tauri\target\release\ # include other Tauri outputs as needed
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Bun (if you build with bun)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.43
+
+      # ---------- Build ----------
+      - name: Install JS / Tauri dependencies
+        run: bun install   # or `npm ci` / `pnpm install`
+
+      - name: Build application
+        run: bun run tauri build --ci   # adjust for npm if needed
+
+      # ---------- Collect & upload artifact ----------
+      - name: Upload packaged bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          # Change this if your bundle ends up elsewhere
+          path: src-tauri/target/release/bundle/**/*
